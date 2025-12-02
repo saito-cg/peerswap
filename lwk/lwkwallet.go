@@ -85,7 +85,7 @@ func (c *LWKRpcWallet) GetElectrumClient() electrum.RPC {
 }
 
 func (r *LWKRpcWallet) IsSupportedVersion() bool {
-	return r.lwkVersion == supportedCLIVersion
+	return r.lwkVersion >= supportedCLIVersion
 }
 
 // setupWallet checks if the swap wallet is already loaded in elementsd, if not it loads/creates it
