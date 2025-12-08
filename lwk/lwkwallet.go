@@ -85,21 +85,23 @@ func (c *LWKRpcWallet) GetElectrumClient() electrum.RPC {
 }
 
 func (r *LWKRpcWallet) IsSupportedVersion() bool {
-	return r.lwkVersion >= supportedCLIVersion
+	return r.lwkVersion == supportedCLIVersion
 }
 
 // setupWallet checks if the swap wallet is already loaded in elementsd, if not it loads/creates it
 func (r *LWKRpcWallet) setupWallet(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
-	vres, err := r.lwkClient.version(timeoutCtx)
-	if err != nil {
-		return err
-	}
-	r.lwkVersion = vres.Version
-	if !r.IsSupportedVersion() {
-		return errors.New("unsupported lwk version. expected: " + supportedCLIVersion + " got: " + r.lwkVersion)
-	}
+
+	// Skipping version check
+	// vres, err := r.lwkClient.version(timeoutCtx)
+	// if err != nil {
+	// 	return err
+	// }
+	// r.lwkVersion = vres.Version
+	// if !r.IsSupportedVersion() {
+	// 	return errors.New("unsupported lwk version. expected: " + supportedCLIVersion + " got: " + r.lwkVersion)
+	// }
 
 	res, err := r.lwkClient.walletDetails(timeoutCtx, &walletDetailsRequest{
 		WalletName: r.c.GetWalletName(),
