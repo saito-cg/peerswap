@@ -88,6 +88,7 @@ type addressResponse struct {
 func (l *lwkclient) address(ctx context.Context, req *addressRequest) (*addressResponse, error) {
 	var resp addressResponse
 	err := l.request(ctx, req, &resp)
+	fmt.Printf("[DEBUG] address response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +141,7 @@ func (l *lwkclient) send(ctx context.Context, s *sendRequest) (*sendResponse, er
 		}
 		return nil
 	}, backoff.WithMaxRetries(backoffStrategy, uint64(maxRetries)))
+	fmt.Printf("[DEBUG] send response: %+v\n", resp)
 	return &resp, err
 }
 
@@ -159,6 +161,7 @@ func (s *signRequest) Name() string {
 func (l *lwkclient) sign(ctx context.Context, s *signRequest) (*signResponse, error) {
 	var resp signResponse
 	err := l.request(ctx, s, &resp)
+	fmt.Printf("[DEBUG] sign response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +185,7 @@ func (b *broadcastRequest) Name() string {
 func (l *lwkclient) broadcast(ctx context.Context, b *broadcastRequest) (*broadcastResponse, error) {
 	var resp broadcastResponse
 	err := l.request(ctx, b, &resp)
+	fmt.Printf("[DEBUG] broadcast response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +208,7 @@ type balanceResponse struct {
 func (l *lwkclient) balance(ctx context.Context, b *balanceRequest) (*balanceResponse, error) {
 	var resp balanceResponse
 	err := l.request(ctx, b, &resp)
+	fmt.Printf("[DEBUG] balance response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +237,7 @@ type walletDetailsResponse struct {
 func (l *lwkclient) walletDetails(ctx context.Context, w *walletDetailsRequest) (*walletDetailsResponse, error) {
 	var resp walletDetailsResponse
 	err := l.request(ctx, w, &resp)
+	fmt.Printf("[DEBUG] walletDetails response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +258,7 @@ type generateSignerResponse struct {
 func (l *lwkclient) generateSigner(ctx context.Context) (*generateSignerResponse, error) {
 	var resp generateSignerResponse
 	err := l.request(ctx, &generateSignerRequest{}, &resp)
+	fmt.Printf("[DEBUG] generateSigner response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +285,7 @@ type loadSoftwareSignerResponse struct {
 func (l *lwkclient) loadSoftwareSigner(ctx context.Context, req *loadSoftwareSignerRequest) (*loadSoftwareSignerResponse, error) {
 	var resp loadSoftwareSignerResponse
 	err := l.request(ctx, req, &resp)
+	fmt.Printf("[DEBUG] loadSoftwareSigner response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -301,6 +309,7 @@ type singlesigDescriptorResponse struct {
 func (l *lwkclient) singlesigDescriptor(ctx context.Context, req *singlesigDescriptorRequest) (*singlesigDescriptorResponse, error) {
 	var resp singlesigDescriptorResponse
 	err := l.request(ctx, req, &resp)
+	fmt.Printf("[DEBUG] singlesigDescriptor response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -324,6 +333,7 @@ type loadWalletResponse struct {
 func (l *lwkclient) loadWallet(ctx context.Context, req *loadWalletRequest) (*loadWalletResponse, error) {
 	var resp loadWalletResponse
 	err := l.request(ctx, req, &resp)
+	fmt.Printf("[DEBUG] loadWallet response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -345,6 +355,7 @@ type versionResponse struct {
 func (l *lwkclient) version(ctx context.Context) (*versionResponse, error) {
 	var resp versionResponse
 	err := l.request(ctx, &versionRequest{}, &resp)
+	fmt.Printf("[DEBUG] version response: %+v\n", resp)
 	if err != nil {
 		return nil, err
 	}
@@ -365,5 +376,9 @@ type WalletSetTxMemoResponse struct {
 }
 
 func (l *lwkclient) walletSetTxMemo(ctx context.Context, req *WalletSetTxMemoRequest) error {
-	return l.request(ctx, req, &WalletSetTxMemoResponse{})
+	var resp WalletSetTxMemoResponse
+	err := l.request(ctx, req, &resp)
+	fmt.Printf("[DEBUG] walletSetTxMemo response: %+v\n", resp)
+	return err
+	// return l.request(ctx, req, &WalletSetTxMemoResponse{})
 }

@@ -90,6 +90,7 @@ func (r *LWKRpcWallet) IsSupportedVersion() bool {
 
 // setupWallet checks if the swap wallet is already loaded in elementsd, if not it loads/creates it
 func (r *LWKRpcWallet) setupWallet(ctx context.Context) error {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
 
@@ -125,6 +126,7 @@ func (r *LWKRpcWallet) setupWallet(ctx context.Context) error {
 }
 
 func (r *LWKRpcWallet) createWallet(ctx context.Context, walletName, signerName string) error {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	res, err := r.lwkClient.generateSigner(ctx)
 	if err != nil {
 		return err
@@ -160,6 +162,7 @@ func (r *LWKRpcWallet) createWallet(ctx context.Context, walletName, signerName 
 // CreateAndBroadcastTransaction takes a tx with outputs and adds inputs in order to spend the tx
 func (r *LWKRpcWallet) CreateAndBroadcastTransaction(swapParams *swap.OpeningParams,
 	asset []byte) (txid, rawTx string, fee Satoshi, err error) {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	feerate := r.getFeeSatPerVByte(ctx).getValue() * kb
@@ -201,6 +204,7 @@ func (r *LWKRpcWallet) CreateAndBroadcastTransaction(swapParams *swap.OpeningPar
 
 // GetBalance returns the balance in sats
 func (r *LWKRpcWallet) GetBalance() (Satoshi, error) {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	balance, err := r.lwkClient.balance(ctx, &balanceRequest{
@@ -214,6 +218,7 @@ func (r *LWKRpcWallet) GetBalance() (Satoshi, error) {
 
 // GetAddress returns a new blech32 address
 func (r *LWKRpcWallet) GetAddress() (string, error) {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	address, err := r.lwkClient.address(ctx, &addressRequest{
@@ -226,6 +231,7 @@ func (r *LWKRpcWallet) GetAddress() (string, error) {
 
 // SendToAddress sends an amount to an address
 func (r *LWKRpcWallet) SendToAddress(address string, amount Satoshi) (string, error) {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	sendres, err := r.lwkClient.send(ctx, &sendRequest{
@@ -291,6 +297,7 @@ func (r *LWKRpcWallet) GetFee(txSizeBytes int64) (Satoshi, error) {
 }
 
 func (r *LWKRpcWallet) SetLabel(txID, address, label string) error {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	return r.lwkClient.walletSetTxMemo(ctx, &WalletSetTxMemoRequest{
@@ -301,6 +308,7 @@ func (r *LWKRpcWallet) SetLabel(txID, address, label string) error {
 }
 
 func (r *LWKRpcWallet) Ping() (bool, error) {
+	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultContextTimeout)
 	defer cancel()
 	_, err := r.lwkClient.version(ctx)
