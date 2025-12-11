@@ -64,6 +64,7 @@ func (h *messageHandler) handlePollMessage(ctx context.Context, msg CustomMessag
 	if err := ctx.Err(); err != nil {
 		return
 	}
+	pslog.Infof("Poll received from %s (payload %d bytes)", msg.From.String(), len(msg.Payload))
 
 	peerID, capability, err := h.parsePollMessage(msg)
 	if err != nil {
@@ -121,13 +122,19 @@ func (h *messageHandler) parsePollMessage(msg CustomMessage) (PeerID, *PeerCapab
 	peerID := msg.From
 	var payload PollMessageDTO
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		pslog.Debugf("Poll decode error from %s: %v (raw: %.200s)", msg.From.String(), err, string(msg.Payload))
 		return peerID, nil, fmt.Errorf("decode poll message: %w", err)
 	}
 
 	capability, err := payload.ToCapability()
 	if err != nil {
+		pslog.Debugf("Poll capability error from %s: %v (assets=%v)", msg.From.String(), err, payload.Assets)
 		return peerID, nil, fmt.Errorf("invalid poll payload: %w", err)
 	}
+
+	// 追加（任意・必要なら）: 解析成功のサマリ
+	pslog.Infof("Poll parsed from %s: version=%d assets=%v allowed=%v",
+		msg.From.String(), payload.Version, payload.Assets, payload.PeerAllowed)
 
 	return peerID, capability, nil
 }

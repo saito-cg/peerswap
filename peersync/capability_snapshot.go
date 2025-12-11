@@ -1,6 +1,8 @@
 package peersync
 
 import (
+	"fmt"
+
 	"github.com/elementsproject/peerswap/premium"
 )
 
@@ -24,6 +26,7 @@ func SnapshotFromCapability(capability *PeerCapability) *PeerCapabilitySnapshot 
 	}
 
 	assets := capability.SupportedAssets()
+	fmt.Printf("[DEBUG] SnapshotFromCapability: assets=%v\n", assets)
 	assetSymbols := make([]string, 0, len(assets))
 	for _, asset := range assets {
 		assetSymbols = append(assetSymbols, asset.String())
