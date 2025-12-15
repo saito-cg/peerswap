@@ -94,11 +94,11 @@ func (r *LWKRpcWallet) setupWallet(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultContextTimeout)
 	defer cancel()
 
+	_, err := r.lwkClient.version(timeoutCtx)
+	if err != nil {
+		return err
+	}
 	// Skipping version check
-	// vres, err := r.lwkClient.version(timeoutCtx)
-	// if err != nil {
-	// 	return err
-	// }
 	// r.lwkVersion = vres.Version
 	// if !r.IsSupportedVersion() {
 	// 	return errors.New("unsupported lwk version. expected: " + supportedCLIVersion + " got: " + r.lwkVersion)
