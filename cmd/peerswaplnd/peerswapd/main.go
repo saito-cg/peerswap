@@ -405,7 +405,17 @@ func run() error {
 	}
 	defer lis.Close()
 
-	grpcSrv := grpc.NewServer()
+	// // Add interceptors
+	interceptors := make([]grpc.UnaryServerInterceptor, 1)
+	interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		// TODO: 認証機能を追加する
+		log.Infof("[DEBUG]Called! !!! !")
+		return handler(ctx, req)
+	})
+
+	grpcOpts := make([]grpc.ServerOption, 0, 1)
+	grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
+	grpcSrv := grpc.NewServer(grpcOpts...)
 
 	peerswaprpc.RegisterPeerSwapServer(grpcSrv, peerswaprpcServer)
 

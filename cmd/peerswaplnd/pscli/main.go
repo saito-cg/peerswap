@@ -26,6 +26,11 @@ func main() {
 			Value: "localhost:42069",
 			Usage: "peerswapd grpc address host:port",
 		},
+		cli.StringFlag{
+			Name:  "password",
+			Value: "<password>",
+			Usage: "peerswapd rpc password",
+		},
 	}
 	app.Commands = []cli.Command{
 		swapOutCommand, swapInCommand, getSwapCommand, listSwapsCommand,
@@ -36,6 +41,20 @@ func main() {
 		getPeerPremiumRateCommand, updatePremiumRateCommand, deletePeerPremiumRateCommand,
 	}
 	app.Version = fmt.Sprintf("commit: %s", GitCommit)
+	app.Before = func(ctx *cli.Context) error {
+		password := ctx.GlobalString("password")
+		fmt.Printf("######### Debug ######### Password: %s\n", password)
+
+		// helpコマンドの場合はパスワードチェックをスキップ
+		if ctx.Command.Name == "help" {
+			return nil
+		}
+
+		// if password == "<password>" {
+		// 	return fmt.Errorf("password must be set")
+		// }
+		return nil
+	}
 	err := app.Run(os.Args)
 	if err != nil {
 		log2.Fatal(err)
