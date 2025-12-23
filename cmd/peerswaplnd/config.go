@@ -33,6 +33,7 @@ var (
 	DefaultBitcoinEnabled = true
 	DefaultLogLevel       = LOGLEVEL_DEBUG
 	DefaultPolicyFile     = filepath.Join(DefaultDatadir, "policy.conf")
+	DefaultRpcAuth        = ""
 
 	defaultLndDir = btcutil.AppDataDir("lnd", false)
 )
@@ -51,6 +52,8 @@ type PeerSwapConfig struct {
 
 	LiquidEnabled  bool `long:"liquidswaps" description:"enable bitcoin peerswaps"`
 	BitcoinEnabled bool `long:"bitcoinswaps" description:"enable bitcoin peerswaps"`
+
+	RpcAuth string `long:"rpcauth" description:"rpc authentication in the form user:password"`
 }
 
 func (p *PeerSwapConfig) String() string {
@@ -155,6 +158,7 @@ func DefaultConfig() *PeerSwapConfig {
 		BitcoinEnabled: DefaultBitcoinEnabled,
 		ElementsConfig: defaultLiquidConfig(),
 		LogLevel:       DefaultLogLevel,
+		RpcAuth:        DefaultRpcAuth,
 	}
 }
 
