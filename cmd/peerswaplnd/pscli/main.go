@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	log2 "log"
 	"os"
 	"strings"
@@ -28,7 +29,6 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:  "password",
-			Value: "<password>",
 			Usage: "peerswapd rpc password",
 		},
 	}
@@ -42,24 +42,19 @@ func main() {
 	}
 	app.Version = fmt.Sprintf("commit: %s", GitCommit)
 	app.Before = func(ctx *cli.Context) error {
-		password := ctx.GlobalString("password")
-		fmt.Printf("######### Debug ######### Password: %s\n", password)
-
-		// helpコマンドの場合はパスワードチェックをスキップ
-		if ctx.Command.Name == "help" {
-			return nil
-		}
-
-		// if password == "<password>" {
-		// 	return fmt.Errorf("password must be set")
-		// }
-		return nil
+		return BeforeAuthenticate(ctx)
 	}
 	err := app.Run(os.Args)
 	if err != nil {
 		log2.Fatal(err)
 	}
 
+}
+
+func BeforeAuthenticate(ctx *cli.Context) error {
+	password := ctx.GlobalString("password")
+	log.Printf("[DEBUG] Using password: %s", password)
+	return nil
 }
 
 var (
