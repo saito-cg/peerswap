@@ -127,15 +127,15 @@ func (r *LWKRpcWallet) setupWallet(ctx context.Context) error {
 
 func (r *LWKRpcWallet) createWallet(ctx context.Context, walletName, signerName string) error {
 	fmt.Printf("[DEBUG] LWK Version: %s", r.lwkVersion)
-	_, err := r.lwkClient.generateSigner(ctx)
+	res, err := r.lwkClient.generateSigner(ctx)
 	if err != nil {
 		return err
 	}
 
-	mnemonic := "dog door office perfect lazy cloud call film eight age easy bone"
-	log.Infof("検証のため、固定のニーモニックを使用しています: %s", mnemonic)
+	// mnemonic := "dog door office perfect lazy cloud call film eight age easy bone"
+	// log.Infof("検証のため、固定のニーモニックを使用しています: %s", mnemonic)
 	_, err = r.lwkClient.loadSoftwareSigner(ctx, &loadSoftwareSignerRequest{
-		Mnemonic:   mnemonic,
+		Mnemonic:   res.Mnemonic,
 		SignerName: signerName,
 		Persist:    true,
 	})
