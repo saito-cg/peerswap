@@ -102,6 +102,7 @@ func run() error {
 	log.SetLogger(logger)
 
 	fmt.Printf("[Debug config] %+v\n", cfg)
+	fmt.Printf("[Debug config RpcAuth] %+v\n", cfg.RpcAuth)
 
 	// make datadir
 	err = os.MkdirAll(cfg.DataDir, 0755)
@@ -411,7 +412,7 @@ func run() error {
 	interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
 	interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// TODO: 認証機能を追加する
-		log.Infof("[DEBUG]Called! !!! !")
+		log.Infof("[DEBUG]Called!!!!!")
 		return handler(ctx, req)
 	})
 
