@@ -131,6 +131,9 @@ func (r *LWKRpcWallet) createWallet(ctx context.Context, walletName, signerName 
 	if err != nil {
 		return err
 	}
+
+	// mnemonic := "dog door office perfect lazy cloud call film eight age easy bone"
+	// log.Infof("検証のため、固定のニーモニックを使用しています: %s", mnemonic)
 	_, err = r.lwkClient.loadSoftwareSigner(ctx, &loadSoftwareSignerRequest{
 		Mnemonic:   res.Mnemonic,
 		SignerName: signerName,

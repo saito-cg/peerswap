@@ -26,6 +26,10 @@ func main() {
 			Value: "localhost:42069",
 			Usage: "peerswapd grpc address host:port",
 		},
+		cli.StringFlag{
+			Name:  "password",
+			Usage: "peerswapd rpc password",
+		},
 	}
 	app.Commands = []cli.Command{
 		swapOutCommand, swapInCommand, getSwapCommand, listSwapsCommand,
