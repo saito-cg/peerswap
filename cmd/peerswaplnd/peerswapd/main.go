@@ -406,7 +406,7 @@ func run() error {
 	defer lis.Close()
 
 	// // Add interceptors
-	interceptors := make([]grpc.UnaryServerInterceptor, 1)
+	interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
 	interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// TODO: 認証機能を追加する
 		log.Infof("[DEBUG]Called! !!! !")
