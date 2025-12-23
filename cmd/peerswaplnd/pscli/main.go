@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	log2 "log"
 	"os"
 	"strings"
@@ -41,20 +40,11 @@ func main() {
 		getPeerPremiumRateCommand, updatePremiumRateCommand, deletePeerPremiumRateCommand,
 	}
 	app.Version = fmt.Sprintf("commit: %s", GitCommit)
-	app.Before = func(ctx *cli.Context) error {
-		return BeforeAuthenticate(ctx)
-	}
 	err := app.Run(os.Args)
 	if err != nil {
 		log2.Fatal(err)
 	}
 
-}
-
-func BeforeAuthenticate(ctx *cli.Context) error {
-	password := ctx.GlobalString("password")
-	log.Printf("[DEBUG] Using password: %s", password)
-	return nil
 }
 
 var (

@@ -1,0 +1,4 @@
+@HOST = http://localhost:42070
+
+### Peer取得
+GET {{HOST}}/v1/peers
