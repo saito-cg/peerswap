@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	log2 "log"
 	"os"
@@ -27,8 +28,8 @@ func main() {
 			Usage: "peerswapd grpc address host:port",
 		},
 		cli.StringFlag{
-			Name:  "password",
-			Usage: "peerswapd rpc password",
+			Name:  "rpcauth",
+			Usage: "rpc authentication in the form 'user:password' or 'Basic base64(user:pass)' or base64('user:pass')",
 		},
 	}
 	app.Commands = []cli.Command{
@@ -662,8 +663,9 @@ func deletePeerPremiumRate(ctx *cli.Context) error {
 
 func getClient(ctx *cli.Context) (peerswaprpc.PeerSwapClient, func(), error) {
 	rpcServer := ctx.GlobalString("rpchost")
+	rpcauth := ctx.GlobalString("rpcauth")
 
-	conn, err := getClientConn(rpcServer)
+	conn, err := getClientConn(rpcServer, rpcauth)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -673,21 +675,61 @@ func getClient(ctx *cli.Context) (peerswaprpc.PeerSwapClient, func(), error) {
 	return psClient, cleanup, nil
 }
 
-func getClientConn(address string) (*grpc.ClientConn,
-	error) {
+type basicAuthCred struct {
+	headerVal string // e.g., "Basic ZWJpczpwYXNzd29yZA=="
+}
 
+func (c basicAuthCred) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	// Use lowercase 'authorization' key to match server-side metadata parsing.
+	return map[string]string{"authorization": c.headerVal}, nil
+}
+func (c basicAuthCred) RequireTransportSecurity() bool { return false }
+
+// buildBasicHeader returns a proper "Basic <base64(user:pass)>" header value
+// from rpcauth input:
+// - "user:password" -> encodes and prefixes "Basic "
+// - "Basic <base64>" -> returns as-is
+// - "<base64>" -> prefixes "Basic " (if it's valid base64)
+func buildBasicHeader(rpcauth string) (string, error) {
+	s := strings.TrimSpace(rpcauth)
+	if s == "" {
+		return "", nil
+	}
+	if strings.Contains(s, ":") {
+		enc := base64.StdEncoding.EncodeToString([]byte(s))
+		return "Basic " + enc, nil
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "basic ") {
+		return s, nil
+	}
+	// Validate it's base64(user:pass)
+	if _, err := base64.StdEncoding.DecodeString(s); err != nil {
+		return "", fmt.Errorf("rpcauth must be 'user:password', base64('user:password'), or 'Basic <base64>'")
+	}
+	return "Basic " + s, nil
+}
+
+func getClientConn(address string, rpcauth string) (*grpc.ClientConn, error) {
 	maxMsgRecvSize := grpc.MaxCallRecvMsgSize(1 * 1024 * 1024 * 200)
 	opts := []grpc.DialOption{
 		grpc.WithDefaultCallOptions(maxMsgRecvSize),
 		grpc.WithInsecure(),
 	}
 
-	conn, err := grpc.Dial(address, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("unable to connect to RPC server: %v",
-			err)
+	// Attach Authorization header via per-RPC credentials if rpcauth is provided.
+	if strings.TrimSpace(rpcauth) != "" {
+		header, err := buildBasicHeader(rpcauth)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, grpc.WithPerRPCCredentials(basicAuthCred{headerVal: header}))
 	}
 
+	conn, err := grpc.Dial(address, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("unable to connect to RPC server: %v", err)
+	}
 	return conn, nil
 }
 

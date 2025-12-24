@@ -1,4 +1,7 @@
 @HOST = http://localhost:42070
+@CREDENTIALS = ZWJpczpwYXNzd29yZA==
 
 ### Peer取得
 GET {{HOST}}/v1/peers
+Content-Type: application/json
+Authorization: Basic {{CREDENTIALS}}

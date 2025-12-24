@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"log"
+	"os"
+
+	"github.com/urfave/cli"
 )
 
 // GenerateSalt creates a random hex salt of specified byte size
@@ -55,7 +57,7 @@ func GenerateRPCAuth(username, password string) (*RPCAuth, error) {
 		var err error
 		password, err = GeneratePassword(32)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate password:  %w", err)
+			return nil, fmt.Errorf("failed to generate password: %w", err)
 		}
 	}
 
@@ -82,85 +84,92 @@ func (r *RPCAuth) String() string {
 }
 
 func main() {
-	username := flag.String("username", "", "Username for authentication (required)")
-	password := flag.String("password", "", "Password (leave empty to auto-generate)")
-	configFormat := flag.Bool("config", false, "Output in config file format")
-	envFormat := flag.Bool("env", false, "Output environment variables only")
-	jsonFormat := flag.Bool("json", false, "Output in JSON format")
+	app := &cli.App{
+		Name:  "ps-rpcauth-generator",
+		Usage: "Generate rpcauth credentials for PeerSwap gRPC authentication",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "username",
+				Usage:    "Username for authentication (required)",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "password",
+				Usage: "Password (leave empty to auto-generate)",
+			},
+			&cli.BoolFlag{
+				Name:  "config",
+				Usage: "Output in config file format",
+			},
+			&cli.BoolFlag{
+				Name:  "env",
+				Usage: "Output environment variables only",
+			},
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Output in JSON format",
+			},
+		},
+		Action: func(c *cli.Context) error {
+			username := c.String("username")
+			password := c.String("password")
+			asConfig := c.Bool("config")
+			asEnv := c.Bool("env")
+			asJSON := c.Bool("json")
 
-	flag.Usage = func() {
-		fmt.Println("Usage: go run generator.go [OPTIONS]")
-		fmt.Println("\nGenerate rpcauth credentials for PeerSwap gRPC authentication")
-		fmt.Println("\nOptions:")
-		flag.PrintDefaults()
-		fmt.Println("\nExamples:")
-		fmt.Println("  # Generate with auto-generated password")
-		fmt.Println("  go run generator. go -username alice")
-		fmt.Println()
-		fmt.Println("  # Generate with specific password")
-		fmt.Println("  go run generator.go -username alice -password mypassword")
-		fmt.Println()
-		fmt.Println("  # Output only config format")
-		fmt.Println("  go run generator.go -username alice -config")
-		fmt.Println()
-		fmt.Println("  # Output only environment variables")
-		fmt.Println("  go run generator.go -username alice -env")
-		fmt.Println()
-		fmt.Println("  # Output in JSON format")
-		fmt.Println("  go run generator.go -username alice -json")
-	}
+			auth, err := GenerateRPCAuth(username, password)
+			if err != nil {
+				return fmt.Errorf("failed to generate credentials: %w", err)
+			}
 
-	flag.Parse()
-
-	if *username == "" {
-		log.Fatal("Error: Username is required.  Use -username flag.")
-	}
-
-	auth, err := GenerateRPCAuth(*username, *password)
-	if err != nil {
-		log.Fatalf("Failed to generate credentials: %v", err)
-	}
-
-	// JSON format output
-	if *jsonFormat {
-		fmt.Printf(`{
+			// JSON format output
+			if asJSON {
+				fmt.Printf(`{
   "username": "%s",
   "password": "%s",
   "rpcauth": "%s:%s$%s"
 }
 `, auth.Username, auth.Password, auth.Username, auth.Salt, auth.Hash)
-		return
+				return nil
+			}
+
+			// Environment variables only
+			if asEnv {
+				fmt.Printf("export PEERSWAP_RPC_USER=%s\n", auth.Username)
+				fmt.Printf("export PEERSWAP_RPC_PASSWORD=%s\n", auth.Password)
+				return nil
+			}
+
+			// Config format only
+			if asConfig {
+				fmt.Println(auth.String())
+				return nil
+			}
+
+			// Full output (default)
+			fmt.Println("╔════════════════════════════════════════════════════════════════╗")
+			fmt.Println("║          PeerSwap RPC Authentication Credentials               ║")
+			fmt.Println("╚════════════════════════════════════════════════════════════════╝")
+			fmt.Println()
+
+			fmt.Println("📝 Configuration File Entry")
+			fmt.Println("───────────────────────────────────────────────────────────────")
+			fmt.Println("Add this line to your peerswap.conf:")
+			fmt.Println()
+			fmt.Printf("  %s\n", auth.String())
+			fmt.Println()
+
+			fmt.Println("🔐 Your Credentials")
+			fmt.Println("───────────────────────────────────────────────────────────────")
+			fmt.Printf("  Username: %s\n", auth.Username)
+			fmt.Printf("  Password: %s\n", auth.Password)
+			fmt.Println()
+
+			return nil
+		},
 	}
 
-	// Environment variables only
-	if *envFormat {
-		fmt.Printf("export PEERSWAP_RPC_USER=%s\n", auth.Username)
-		fmt.Printf("export PEERSWAP_RPC_PASSWORD=%s\n", auth.Password)
-		return
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
 	}
-
-	// Config format only
-	if *configFormat {
-		fmt.Println(auth.String())
-		return
-	}
-
-	// Full output (default)
-	fmt.Println("╔════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║          PeerSwap RPC Authentication Credentials               ║")
-	fmt.Println("╚════════════════════════════════════════════════════════════════╝")
-	fmt.Println()
-
-	fmt.Println("📝 Configuration File Entry")
-	fmt.Println("───────────────────────────────────────────────────────────────")
-	fmt.Println("Add this line to your peerswap.conf:")
-	fmt.Println()
-	fmt.Printf("  %s\n", auth.String())
-	fmt.Println()
-
-	fmt.Println("🔐 Your Credentials")
-	fmt.Println("───────────────────────────────────────────────────────────────")
-	fmt.Printf("  Username: %s\n", auth.Username)
-	fmt.Printf("  Password: %s\n", auth.Password)
-	fmt.Println()
 }
