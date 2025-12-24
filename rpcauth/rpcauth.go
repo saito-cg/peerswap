@@ -22,7 +22,7 @@ type Entry struct {
 	Hash string // lowercased hex HMAC-SHA256(salt, password)
 }
 
-// ParseConfigValue parses a config value that may contain one or more rpcauth
+// ParseConfigValue parses a config string that may contain one or more rpcauth
 // entries separated by commas. Each entry must be in the form "username:salt$hash".
 func ParseConfigValue(authValue string) map[string]Entry {
 	raw := strings.TrimSpace(authValue)
@@ -48,7 +48,6 @@ func ParseRpcauthEntries(entries []string) map[string]Entry {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] empty, skip", idx)
 			continue
 		}
-		// format: username:salt$hash
 		parts := strings.SplitN(e, ":", 2)
 		if len(parts) != 2 {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] invalid (missing ':'), raw=%q", idx, e)
@@ -66,7 +65,6 @@ func ParseRpcauthEntries(entries []string) map[string]Entry {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] invalid (empty component) user=%q saltLen=%d hashLen=%d", idx, user, len(salt), len(hash))
 			continue
 		}
-		// rpcauth.py uses 16-byte salt (hex => len 32) and SHA256 HMAC (hex => len 64). Not enforced, just logged.
 		if len(salt) != 32 {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] salt length unexpected: got=%d user=%q", idx, len(salt), user)
 		}
@@ -88,7 +86,6 @@ func ExtractBasicAuth(ctx context.Context) (string, string, bool) {
 	if !ok {
 		return "", "", false
 	}
-	// Try lowercase first (typical with grpc-gateway), then uppercase.
 	authVals := md.Get("authorization")
 	log.Debugf("[AUTH][ExtractBasicAuth] 'authorization' header count=%d", len(authVals))
 	if len(authVals) == 0 {
@@ -117,13 +114,11 @@ func ExtractBasicAuth(ctx context.Context) (string, string, bool) {
 		log.Debugf("[AUTH][ExtractBasicAuth] decoded credential missing ':' separator")
 		return "", "", false
 	}
-	// Do not log password for safety.
 	log.Debugf("[AUTH][ExtractBasicAuth] parsed user=%q passwordLen=%d", up[0], len(up[1]))
 	return up[0], up[1], true
 }
 
-// VerifyRpcauth implements Bitcoin Core rpcauth verification:
-// hash == HMAC_SHA256(key=salt, msg=password). Compare in constant time.
+// VerifyRpcauth: hash == HMAC_SHA256(key=salt, msg=password).
 func VerifyRpcauth(user, password string, auths map[string]Entry) bool {
 	log.Debugf("[AUTH][VerifyRpcauth] start verify user=%q authsCount=%d", user, len(auths))
 	entry, ok := auths[user]
@@ -132,22 +127,15 @@ func VerifyRpcauth(user, password string, auths map[string]Entry) bool {
 		return false
 	}
 	log.Debugf("[AUTH][VerifyRpcauth] found entry for user=%q saltLen=%d hashLen=%d", user, len(entry.Salt), len(entry.Hash))
-
-	// HMAC-SHA256 with salt as key and password as message.
 	mac := hmac.New(sha256.New, []byte(entry.Salt))
 	mac.Write([]byte(password))
-	sum := mac.Sum(nil)
-	sumHex := hex.EncodeToString(sum)
-	// Log only a short prefix of the computed hash to avoid leaking full values.
+	sumHex := hex.EncodeToString(mac.Sum(nil))
 	log.Debugf("[AUTH][VerifyRpcauth] computed hash hex prefix=%q fullLen=%d", prefix(sumHex, 12), len(sumHex))
-
 	match := subtle.ConstantTimeCompare([]byte(sumHex), []byte(strings.ToLower(entry.Hash))) == 1
 	log.Debugf("[AUTH][VerifyRpcauth] constant-time compare result=%v", match)
 	return match
 }
 
-// NewUnaryInterceptor builds a gRPC unary interceptor that enforces rpcauth.
-// If authMap is empty, authentication is skipped (backwards-compatible).
 func NewUnaryInterceptor(authMap map[string]Entry) grpc.UnaryServerInterceptor {
 	log.Debugf("[AUTH][Interceptor] build interceptor authMapCount=%d", len(authMap))
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -170,7 +158,6 @@ func NewUnaryInterceptor(authMap map[string]Entry) grpc.UnaryServerInterceptor {
 	}
 }
 
-// prefix returns up to n characters of s for safe logging.
 func prefix(s string, n int) string {
 	if n <= 0 {
 		return ""

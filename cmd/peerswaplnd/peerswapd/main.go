@@ -409,26 +409,21 @@ func run() error {
 	}
 	defer lis.Close()
 
-	// Add interceptors
-	// interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
-	// interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	// 	// TODO: 認証機能を追加する
-	// 	log.Infof("[DEBUG]Called!!!!!")
-	// 	return handler(ctx, req)
-	// })
-
-	// grpcOpts := make([]grpc.ServerOption, 0, 1)
-	// grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
-	// grpcSrv := grpc.NewServer(grpcOpts...)
-
-	authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)
-
-	interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
-	interceptors = append(interceptors, rpcauth.NewUnaryInterceptor(authMap))
-
-	grpcOpts := make([]grpc.ServerOption, 0, 1)
-	grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
-	grpcSrv := grpc.NewServer(grpcOpts...)
+	rpcauthEntries := rpcauth.ParseConfigValue(cfg.RpcAuth)
+	var grpcSrv *grpc.Server
+	if len(rpcauthEntries) == 0 {
+		log.Infof("[AUTH] rpcauth disabled (no entries in config). Starting gRPC without auth interceptor.")
+		grpcSrv = grpc.NewServer()
+	} else {
+		log.Infof("[AUTH] rpcauth enabled with %d entries. Starting gRPC with auth interceptor.", len(rpcauthEntries))
+		interceptors := []grpc.UnaryServerInterceptor{
+			rpcauth.NewUnaryInterceptor(rpcauthEntries),
+		}
+		grpcOpts := []grpc.ServerOption{
+			grpc.ChainUnaryInterceptor(interceptors...),
+		}
+		grpcSrv = grpc.NewServer(grpcOpts...)
+	}
 
 	peerswaprpc.RegisterPeerSwapServer(grpcSrv, peerswaprpcServer)
 
