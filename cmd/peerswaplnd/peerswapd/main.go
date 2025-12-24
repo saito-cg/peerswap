@@ -22,6 +22,7 @@ import (
 	"github.com/elementsproject/peerswap/log"
 	"github.com/elementsproject/peerswap/lwk"
 	"github.com/elementsproject/peerswap/premium"
+	"github.com/elementsproject/peerswap/rpcauth"
 
 	"github.com/elementsproject/peerswap/version"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -408,13 +409,22 @@ func run() error {
 	}
 	defer lis.Close()
 
-	// // Add interceptors
+	// Add interceptors
+	// interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
+	// interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	// 	// TODO: 認証機能を追加する
+	// 	log.Infof("[DEBUG]Called!!!!!")
+	// 	return handler(ctx, req)
+	// })
+
+	// grpcOpts := make([]grpc.ServerOption, 0, 1)
+	// grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
+	// grpcSrv := grpc.NewServer(grpcOpts...)
+
+	authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)
+
 	interceptors := make([]grpc.UnaryServerInterceptor, 0, 1)
-	interceptors = append(interceptors, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		// TODO: 認証機能を追加する
-		log.Infof("[DEBUG]Called!!!!!")
-		return handler(ctx, req)
-	})
+	interceptors = append(interceptors, rpcauth.NewUnaryInterceptor(authMap))
 
 	grpcOpts := make([]grpc.ServerOption, 0, 1)
 	grpcOpts = append(grpcOpts, grpc.ChainUnaryInterceptor(interceptors...))
