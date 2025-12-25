@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -298,5 +299,183 @@ func TestNewHTTPAuthMiddleware(t *testing.T) {
 	}
 	if res6.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", res6.StatusCode)
+	}
+}
+
+// Additional tests to improve coverage
+
+func TestBuildSecurity_DefaultLocalhost(t *testing.T) {
+	sec := BuildSecurity("", nil)
+	if len(sec.AuthMap) != 0 {
+		t.Fatalf("expected empty auth map")
+	}
+	if len(sec.AllowedNets) == 0 {
+		t.Fatalf("expected localhost default allowlist")
+	}
+	// localhost must be contained
+	ipv4 := net.ParseIP("127.0.0.1")
+	ipv6 := net.ParseIP("::1")
+	if !ipAllowed(ipv4, sec.AllowedNets) || !ipAllowed(ipv6, sec.AllowedNets) {
+		t.Fatalf("localhost IPs must be allowed by default")
+	}
+}
+
+func TestEnsureDefaultLocalAllow_NoConfig(t *testing.T) {
+	allow := EnsureDefaultLocalAllow(nil)
+	if len(allow) == 0 {
+		t.Fatalf("expected default localhost allow nets")
+	}
+	if !ipAllowed(net.ParseIP("127.0.0.1"), allow) || !ipAllowed(net.ParseIP("::1"), allow) {
+		t.Fatalf("localhost must be allowed")
+	}
+
+	// Already set should be unchanged
+	custom := ParseAllowCIDRs([]string{"10.0.0.0/8"})
+	unchanged := EnsureDefaultLocalAllow(custom)
+	if len(unchanged) != len(custom) {
+		t.Fatalf("expected unchanged allowed nets")
+	}
+}
+
+func TestNewUnaryIPAllowInterceptor_PeerAddrAllowedDenied(t *testing.T) {
+	allowLocal := ParseAllowCIDRs([]string{"127.0.0.1", "::1"})
+	ipInterceptor := NewUnaryIPAllowInterceptor(allowLocal)
+
+	// Allowed: peerAddr = 127.0.0.1
+	tcp := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
+	ctxAllowed := peer.NewContext(context.Background(), &peer.Peer{Addr: tcp})
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+	info := &grpc.UnaryServerInfo{FullMethod: "/peerswap.PeerSwap/ListPeers"}
+	if _, err := ipInterceptor(ctxAllowed, nil, info, handler); err != nil {
+		t.Fatalf("expected allowed, got error: %v", err)
+	}
+
+	// Denied: peerAddr = 8.8.8.8
+	tcpDenied := &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 54321}
+	ctxDenied := peer.NewContext(context.Background(), &peer.Peer{Addr: tcpDenied})
+	_, err := ipInterceptor(ctxDenied, nil, info, handler)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
+func TestNewUnaryIPAllowInterceptor_XFFPriority(t *testing.T) {
+	allow := ParseAllowCIDRs([]string{"203.0.113.0/24"}) // documentation range
+	ipInterceptor := NewUnaryIPAllowInterceptor(allow)
+
+	// Context with X-Forwarded-For pointing to allowed range and peer addr not allowed
+	md := metadata.New(map[string]string{"x-forwarded-for": "203.0.113.99"})
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 1}
+	ctx = peer.NewContext(ctx, &peer.Peer{Addr: peerAddr})
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) { return "ok", nil }
+	info := &grpc.UnaryServerInfo{FullMethod: "/peerswap.PeerSwap/ListPeers"}
+	if _, err := ipInterceptor(ctx, nil, info, handler); err != nil {
+		t.Fatalf("expected allowed via XFF, got error: %v", err)
+	}
+}
+
+func TestGRPCServerOptions_BuildChain(t *testing.T) {
+	salt := "0123456789abcdef0123456789abcdef"
+	auth := map[string]Entry{"alice": {Salt: salt, Hash: hmacHex(salt, "secret")}}
+	allow := ParseAllowCIDRs([]string{"127.0.0.1", "::1"})
+	sec := SecurityOptions{AuthMap: auth, AllowedNets: allow}
+
+	opts := GRPCServerOptions(sec)
+	if len(opts) == 0 {
+		t.Fatalf("expected non-empty grpc server options")
+	}
+	// create server to exercise code path (no need to serve)
+	_ = grpc.NewServer(opts...)
+}
+
+func TestRESTHandler_WithAuthAndIP(t *testing.T) {
+	base := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+
+	salt := "0123456789abcdef0123456789abcdef"
+	auth := map[string]Entry{"alice": {Salt: salt, Hash: hmacHex(salt, "secret")}}
+	sec := SecurityOptions{
+		AuthMap:     auth,
+		AllowedNets: ParseAllowCIDRs([]string{"127.0.0.1", "::1"}),
+	}
+
+	handler := RESTHandler(base, sec)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	// Missing Authorization -> 401
+	req1, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/test", nil)
+	res1, _ := http.DefaultClient.Do(req1)
+	if res1.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", res1.StatusCode)
+	}
+
+	// Correct Authorization -> 200
+	cred := base64.StdEncoding.EncodeToString([]byte("alice:secret"))
+	req2, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/test", nil)
+	req2.Header.Set("Authorization", "Basic "+cred)
+	res2, _ := http.DefaultClient.Do(req2)
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res2.StatusCode)
+	}
+}
+
+func TestClientIP_HTTP_XFF(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	r.RemoteAddr = "8.8.8.8:5555"
+	r.Header.Set("X-Forwarded-For", "198.51.100.1, 198.51.100.2")
+	ip := clientIP(r)
+	if ip.String() != "198.51.100.1" {
+		t.Fatalf("expected XFF primary ip, got %s", ip)
+	}
+}
+
+func TestClientIPFromGRPC_XFFVsPeer(t *testing.T) {
+	// XFF should be preferred
+	md := metadata.New(map[string]string{"X-Forwarded-For": "198.51.100.7"})
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}
+	ctx = peer.NewContext(ctx, &peer.Peer{Addr: peerAddr})
+	ip := clientIPFromGRPC(ctx)
+	if ip.String() != "198.51.100.7" {
+		t.Fatalf("expected XFF ip, got %s", ip)
+	}
+
+	// No XFF: peer addr used
+	ctx2 := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 2}})
+	ip2 := clientIPFromGRPC(ctx2)
+	if ip2.String() != "10.0.0.1" {
+		t.Fatalf("expected peer ip, got %s", ip2)
+	}
+}
+
+func TestPrefix(t *testing.T) {
+	if prefix("abcdef", 3) != "abc..." {
+		t.Fatalf("unexpected prefix result")
+	}
+	if prefix("ab", 5) != "ab" {
+		t.Fatalf("unexpected prefix result when shorter")
+	}
+	if prefix("", 2) != "" {
+		t.Fatalf("unexpected prefix for empty")
+	}
+}
+
+func TestExtractBasicFromHTTP_InvalidBase64(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	r.Header.Set("Authorization", "Basic !!notbase64!!")
+	if _, _, ok := extractBasicFromHTTP(r); ok {
+		t.Fatalf("expected ok=false for invalid base64")
+	}
+}
+
+func TestIPAllowed_NilIP(t *testing.T) {
+	nets := ParseAllowCIDRs([]string{"127.0.0.1"})
+	if ipAllowed(nil, nets) {
+		t.Fatalf("nil IP must not be allowed")
 	}
 }

@@ -26,6 +26,21 @@ type Entry struct {
 	Hash string // lowercased hex HMAC-SHA256(salt, password)
 }
 
+// SecurityOptions collects auth map and IP allowlist used by both gRPC and REST.
+type SecurityOptions struct {
+	AuthMap     map[string]Entry
+	AllowedNets []*net.IPNet
+}
+
+// BuildSecurity parses rpcauth and rpcallowip from config values,
+// and applies localhost-only default when rpcallowip is not set.
+func BuildSecurity(rpcauthValue string, rpcAllowIPs []string) SecurityOptions {
+	authMap := ParseConfigValue(rpcauthValue)
+	allow := ParseAllowCIDRs(rpcAllowIPs)
+	allow = EnsureDefaultLocalAllow(allow)
+	return SecurityOptions{AuthMap: authMap, AllowedNets: allow}
+}
+
 // ParseConfigValue parses a config string that may contain one or more rpcauth
 // entries separated by commas. Each entry must be in the form "username:salt$hash".
 func ParseConfigValue(authValue string) map[string]Entry {
@@ -68,12 +83,6 @@ func ParseRpcauthEntries(entries []string) map[string]Entry {
 		if user == "" || salt == "" || hash == "" {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] invalid (empty component) user=%q saltLen=%d hashLen=%d", idx, user, len(salt), len(hash))
 			continue
-		}
-		if len(salt) != 32 {
-			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] salt length unexpected: got=%d user=%q", idx, len(salt), user)
-		}
-		if len(hash) != 64 {
-			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] hash length unexpected: got=%d user=%q", idx, len(hash), user)
 		}
 		lowerHash := strings.ToLower(hash)
 		auths[user] = Entry{Salt: salt, Hash: lowerHash}
@@ -130,65 +139,49 @@ func VerifyRpcauth(user, password string, auths map[string]Entry) bool {
 		log.Debugf("[AUTH][VerifyRpcauth] user not found: %q", user)
 		return false
 	}
-	log.Debugf("[AUTH][VerifyRpcauth] found entry for user=%q saltLen=%d hashLen=%d", user, len(entry.Salt), len(entry.Hash))
 	mac := hmac.New(sha256.New, []byte(entry.Salt))
 	mac.Write([]byte(password))
 	sumHex := hex.EncodeToString(mac.Sum(nil))
-	log.Debugf("[AUTH][VerifyRpcauth] computed hash hex prefix=%q fullLen=%d", prefix(sumHex, 12), len(sumHex))
 	match := subtle.ConstantTimeCompare([]byte(sumHex), []byte(strings.ToLower(entry.Hash))) == 1
-	log.Debugf("[AUTH][VerifyRpcauth] constant-time compare result=%v", match)
 	return match
 }
 
 // NewUnaryInterceptor builds a gRPC unary interceptor that enforces rpcauth.
 // If authMap is empty, authentication is skipped (backwards-compatible).
 func NewUnaryInterceptor(authMap map[string]Entry) grpc.UnaryServerInterceptor {
-	log.Debugf("[AUTH][Interceptor] build interceptor authMapCount=%d", len(authMap))
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		log.Debugf("[AUTH][Interceptor] invoked method=%s authEnabled=%v", info.FullMethod, len(authMap) > 0)
 		if len(authMap) == 0 {
 			return handler(ctx, req)
 		}
 		u, p, ok := ExtractBasicAuth(ctx)
-		log.Debugf("[AUTH][Interceptor] extracted auth ok=%v user=%q passwordLen=%d", ok, u, len(p))
 		if !ok {
-			log.Infof("[AUTH] missing or invalid Authorization header for %s", info.FullMethod)
 			return nil, status.Error(codes.Unauthenticated, "missing or invalid Authorization header")
 		}
 		if !VerifyRpcauth(u, p, authMap) {
-			log.Infof("[AUTH] authentication failed for user '%s' on %s", u, info.FullMethod)
 			return nil, status.Error(codes.Unauthenticated, "authentication failed")
 		}
-		log.Debugf("[AUTH][Interceptor] authentication success for user=%q method=%s", u, info.FullMethod)
 		return handler(ctx, req)
 	}
 }
 
 // ParseAllowCIDRs parses allowlist strings (IP or CIDR) into []*net.IPNet.
-// - "1.2.3.4" -> 1.2.3.4/32
-// - "2001:db8::1" -> /128
-// - "10.0.0.0/8" -> as-is
 func ParseAllowCIDRs(rpcAllow []string) []*net.IPNet {
 	var nets []*net.IPNet
-	for idx, v := range rpcAllow {
+	for _, v := range rpcAllow {
 		s := strings.TrimSpace(v)
 		if s == "" {
-			log.Debugf("[AUTH][ParseAllowCIDRs] entry[%d] empty, skip", idx)
 			continue
 		}
 		if strings.Contains(s, "/") {
 			_, n, err := net.ParseCIDR(s)
 			if err != nil {
-				log.Debugf("[AUTH][ParseAllowCIDRs] invalid CIDR %q: %v", s, err)
 				continue
 			}
 			nets = append(nets, n)
-			log.Debugf("[AUTH][ParseAllowCIDRs] add CIDR %q", s)
 			continue
 		}
 		ip := net.ParseIP(s)
 		if ip == nil {
-			log.Debugf("[AUTH][ParseAllowCIDRs] invalid IP %q", s)
 			continue
 		}
 		var mask net.IPMask
@@ -199,31 +192,25 @@ func ParseAllowCIDRs(rpcAllow []string) []*net.IPNet {
 		}
 		n := &net.IPNet{IP: ip, Mask: mask}
 		nets = append(nets, n)
-		log.Debugf("[AUTH][ParseAllowCIDRs] add IP %q", s)
 	}
-	log.Infof("[AUTH] rpcallowip entries=%d", len(nets))
 	return nets
 }
 
 // EnsureDefaultLocalAllow applies bitcoind-like default: if rpcallowip is not set,
-// restrict to localhost only (127.0.0.1 and ::1).
+// restrict to localhost only (127.0.0.1 and ::1). Used for both REST and gRPC.
 func EnsureDefaultLocalAllow(allowedNets []*net.IPNet) []*net.IPNet {
 	if len(allowedNets) == 0 {
-		log.Infof("[AUTH] rpcallowip not set; defaulting to localhost-only (127.0.0.1, ::1)")
 		return ParseAllowCIDRs([]string{"127.0.0.1", "::1"})
 	}
 	return allowedNets
 }
 
 // NewUnaryIPAllowInterceptor enforces IP allowlist on gRPC.
-// - If allowedNets is empty, the check is skipped (but typically EnsureDefaultLocalAllow will populate localhost-only).
 func NewUnaryIPAllowInterceptor(allowedNets []*net.IPNet) grpc.UnaryServerInterceptor {
-	log.Infof("[AUTH][gRPC] ip-allowlist interceptor enabled=%v count=%d", len(allowedNets) > 0, len(allowedNets))
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if len(allowedNets) > 0 {
 			ip := clientIPFromGRPC(ctx)
 			if !ipAllowed(ip, allowedNets) {
-				log.Infof("[AUTH][gRPC] forbidden remote ip=%v method=%s", ip, info.FullMethod)
 				return nil, status.Error(codes.PermissionDenied, "forbidden: ip not allowed")
 			}
 		}
@@ -231,13 +218,9 @@ func NewUnaryIPAllowInterceptor(allowedNets []*net.IPNet) grpc.UnaryServerInterc
 	}
 }
 
-// clientIPFromGRPC tries to determine the real client IP for gRPC requests.
-// Priority:
-// 1) x-forwarded-for metadata (left-most IP)
-// 2) peer.Addr (remote address of the transport)
+// clientIPFromGRPC determines client IP for gRPC requests (XFF metadata > peer.Addr).
 func clientIPFromGRPC(ctx context.Context) net.IP {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		// try lowercase then capitalized key
 		xff := md.Get("x-forwarded-for")
 		if len(xff) == 0 {
 			xff = md.Get("X-Forwarded-For")
@@ -246,7 +229,6 @@ func clientIPFromGRPC(ctx context.Context) net.IP {
 			parts := strings.Split(xff[0], ",")
 			ip := net.ParseIP(strings.TrimSpace(parts[0]))
 			if ip != nil {
-				log.Debugf("[AUTH][gRPC] XFF client ip=%s", ip)
 				return ip
 			}
 		}
@@ -254,13 +236,9 @@ func clientIPFromGRPC(ctx context.Context) net.IP {
 	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
 		host, _, err := net.SplitHostPort(p.Addr.String())
 		if err == nil {
-			ip := net.ParseIP(host)
-			log.Debugf("[AUTH][gRPC] peer client ip=%s", ip)
-			return ip
+			return net.ParseIP(host)
 		}
-		// If SplitHostPort fails (rare), try parse whole string
 		if ip := net.ParseIP(p.Addr.String()); ip != nil {
-			log.Debugf("[AUTH][gRPC] peer client ip=%s", ip)
 			return ip
 		}
 	}
@@ -268,57 +246,67 @@ func clientIPFromGRPC(ctx context.Context) net.IP {
 }
 
 // NewHTTPAuthMiddleware returns an HTTP middleware that enforces rpcallowip and rpcauth.
-// - If allowedNets is non-empty, only requests from these IP ranges are allowed.
-// - If authMap is non-empty, Authorization: Basic base64(user:pass) is required.
-// - If either is empty, the corresponding check is skipped.
 func NewHTTPAuthMiddleware(authMap map[string]Entry, allowedNets []*net.IPNet) func(next http.Handler) http.Handler {
 	enabled := len(authMap) > 0
-	log.Infof("[AUTH][HTTP] rpcauth enabled=%v, rpcallowip count=%d", enabled, len(allowedNets))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// IP allowlist check
 			if len(allowedNets) > 0 {
 				remoteIP := clientIP(r)
 				if !ipAllowed(remoteIP, allowedNets) {
-					log.Infof("[AUTH][HTTP] forbidden remote ip=%s path=%s", remoteIP, r.URL.Path)
-					writeJSON(w, http.StatusForbidden, 7, "forbidden: ip not allowed") // gRPC code 7: PermissionDenied
+					writeJSON(w, http.StatusForbidden, 7, "forbidden: ip not allowed")
 					return
 				}
 			}
-
 			// rpcauth check
 			if enabled {
 				u, p, ok := extractBasicFromHTTP(r)
 				if !ok {
-					log.Infof("[AUTH][HTTP] missing or invalid Authorization header path=%s", r.URL.Path)
 					w.Header().Set("Www-Authenticate", `Basic realm="peerswap"`)
-					writeJSON(w, http.StatusUnauthorized, 16, "missing or invalid Authorization header") // gRPC code 16: Unauthenticated
+					writeJSON(w, http.StatusUnauthorized, 16, "missing or invalid Authorization header")
 					return
 				}
 				if !VerifyRpcauth(u, p, authMap) {
-					log.Infof("[AUTH][HTTP] authentication failed for user=%q path=%s", u, r.URL.Path)
 					w.Header().Set("Www-Authenticate", `Basic realm="peerswap"`)
 					writeJSON(w, http.StatusUnauthorized, 16, "authentication failed")
 					return
 				}
 			}
-
-			// OK
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
+// Convenience helpers to reduce boilerplate in peerswapd/main.go
+
+// GRPCServerOptions returns server options with IP allowlist and optional rpcauth.
+func GRPCServerOptions(sec SecurityOptions, extra ...grpc.ServerOption) []grpc.ServerOption {
+	var interceptors []grpc.UnaryServerInterceptor
+	interceptors = append(interceptors, NewUnaryIPAllowInterceptor(sec.AllowedNets))
+	if len(sec.AuthMap) > 0 {
+		interceptors = append(interceptors, NewUnaryInterceptor(sec.AuthMap))
+	}
+	opts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(interceptors...),
+	}
+	return append(opts, extra...)
+}
+
+// RESTHandler wraps a base handler with IP allowlist and optional rpcauth checks.
+func RESTHandler(base http.Handler, sec SecurityOptions) http.Handler {
+	return NewHTTPAuthMiddleware(sec.AuthMap, sec.AllowedNets)(base)
+}
+
+// HTTP helpers
+
 func extractBasicFromHTTP(r *http.Request) (string, string, bool) {
 	auth := r.Header.Get("Authorization")
-	log.Debugf("[AUTH][HTTP] Authorization header prefix=%q", prefix(auth, 16))
 	if auth == "" || !strings.HasPrefix(strings.ToLower(auth), "basic ") {
 		return "", "", false
 	}
 	enc := strings.TrimSpace(auth[len("Basic "):])
 	dec, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil {
-		log.Debugf("[AUTH][HTTP] base64 decode failed: %v", err)
 		return "", "", false
 	}
 	cred := string(dec)
@@ -330,23 +318,18 @@ func extractBasicFromHTTP(r *http.Request) (string, string, bool) {
 }
 
 func clientIP(r *http.Request) net.IP {
-	// Trust X-Forwarded-For first if present (left-most IP)
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
 		ip := net.ParseIP(strings.TrimSpace(parts[0]))
 		if ip != nil {
-			log.Debugf("[AUTH][HTTP] XFF client ip=%s", ip)
 			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		log.Debugf("[AUTH][HTTP] split remote addr failed: %v", err)
 		return nil
 	}
-	ip := net.ParseIP(host)
-	log.Debugf("[AUTH][HTTP] remote ip=%s", ip)
-	return ip
+	return net.ParseIP(host)
 }
 
 func ipAllowed(ip net.IP, nets []*net.IPNet) bool {

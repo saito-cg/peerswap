@@ -409,39 +409,20 @@ func run() error {
 	}
 	defer lis.Close()
 
-	// ---- gRPC: apply IP allowlist and optional rpcauth ----
-	rpcauthEntries := rpcauth.ParseConfigValue(cfg.RpcAuth)
+	security := rpcauth.BuildSecurity(cfg.RpcAuth, cfg.RpcAllowIP)
 
-	// Parse rpcallowip and default to localhost-only if empty (bitcoind-like behavior)
-	allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP)
-	allowNets = rpcauth.EnsureDefaultLocalAllow(allowNets)
-
-	var interceptors []grpc.UnaryServerInterceptor
-	// IP allowlist (always applied; if allowNets has only localhost, external access is denied)
-	interceptors = append(interceptors, rpcauth.NewUnaryIPAllowInterceptor(allowNets))
-
-	if len(rpcauthEntries) > 0 {
-		log.Infof("[AUTH][gRPC] rpcauth enabled with %d entries", len(rpcauthEntries))
-		interceptors = append(interceptors, rpcauth.NewUnaryInterceptor(rpcauthEntries))
-	} else {
-		log.Infof("[AUTH][gRPC] rpcauth disabled (no entries in config)")
-	}
-
-	grpcOpts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(interceptors...),
-	}
+	grpcOpts := rpcauth.GRPCServerOptions(security)
 	grpcSrv := grpc.NewServer(grpcOpts...)
-
 	peerswaprpc.RegisterPeerSwapServer(grpcSrv, peerswaprpcServer)
 
 	go func() {
-		err := grpcSrv.Serve(lis)
-		if err != nil {
+		if err := grpcSrv.Serve(lis); err != nil {
 			core_log.Fatal(err)
 		}
 	}()
 	defer grpcSrv.Stop()
 	log.Infof("peerswapd grpc listening on %v", cfg.Host)
+
 	if cfg.RestHost != "" {
 		mux := runtime.NewServeMux(
 			runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
@@ -455,27 +436,20 @@ func run() error {
 			}),
 		)
 		opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-		err := peerswaprpc.RegisterPeerSwapHandlerFromEndpoint(ctx, mux, cfg.Host, opts)
-		if err != nil {
+		if err := peerswaprpc.RegisterPeerSwapHandlerFromEndpoint(ctx, mux, cfg.Host, opts); err != nil {
 			return err
 		}
 
-		// auth disabled if no entries
-		authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)
-		// parse configured list
-		allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP)
-		// default to localhost-only if empty
-		allowNets = rpcauth.EnsureDefaultLocalAllow(allowNets)
-		handler := rpcauth.NewHTTPAuthMiddleware(authMap, allowNets)(mux)
+		handler := rpcauth.RESTHandler(mux, security)
 
 		go func() {
-			err := http.ListenAndServe(cfg.RestHost, handler)
-			if err != nil {
+			if err := http.ListenAndServe(cfg.RestHost, handler); err != nil {
 				core_log.Fatal(err)
 			}
 		}()
 		log.Infof("peerswapd rest listening on %v", cfg.RestHost)
 	}
+
 	<-shutdown
 	return nil
 }
