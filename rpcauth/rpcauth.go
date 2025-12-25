@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -208,10 +209,62 @@ func ParseAllowCIDRs(rpcAllow []string) []*net.IPNet {
 // restrict to localhost only (127.0.0.1 and ::1).
 func EnsureDefaultLocalAllow(allowedNets []*net.IPNet) []*net.IPNet {
 	if len(allowedNets) == 0 {
-		log.Infof("[AUTH][HTTP] rpcallowip not set; defaulting to localhost-only (127.0.0.1, ::1)")
+		log.Infof("[AUTH] rpcallowip not set; defaulting to localhost-only (127.0.0.1, ::1)")
 		return ParseAllowCIDRs([]string{"127.0.0.1", "::1"})
 	}
 	return allowedNets
+}
+
+// NewUnaryIPAllowInterceptor enforces IP allowlist on gRPC.
+// - If allowedNets is empty, the check is skipped (but typically EnsureDefaultLocalAllow will populate localhost-only).
+func NewUnaryIPAllowInterceptor(allowedNets []*net.IPNet) grpc.UnaryServerInterceptor {
+	log.Infof("[AUTH][gRPC] ip-allowlist interceptor enabled=%v count=%d", len(allowedNets) > 0, len(allowedNets))
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if len(allowedNets) > 0 {
+			ip := clientIPFromGRPC(ctx)
+			if !ipAllowed(ip, allowedNets) {
+				log.Infof("[AUTH][gRPC] forbidden remote ip=%v method=%s", ip, info.FullMethod)
+				return nil, status.Error(codes.PermissionDenied, "forbidden: ip not allowed")
+			}
+		}
+		return handler(ctx, req)
+	}
+}
+
+// clientIPFromGRPC tries to determine the real client IP for gRPC requests.
+// Priority:
+// 1) x-forwarded-for metadata (left-most IP)
+// 2) peer.Addr (remote address of the transport)
+func clientIPFromGRPC(ctx context.Context) net.IP {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		// try lowercase then capitalized key
+		xff := md.Get("x-forwarded-for")
+		if len(xff) == 0 {
+			xff = md.Get("X-Forwarded-For")
+		}
+		if len(xff) > 0 {
+			parts := strings.Split(xff[0], ",")
+			ip := net.ParseIP(strings.TrimSpace(parts[0]))
+			if ip != nil {
+				log.Debugf("[AUTH][gRPC] XFF client ip=%s", ip)
+				return ip
+			}
+		}
+	}
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		host, _, err := net.SplitHostPort(p.Addr.String())
+		if err == nil {
+			ip := net.ParseIP(host)
+			log.Debugf("[AUTH][gRPC] peer client ip=%s", ip)
+			return ip
+		}
+		// If SplitHostPort fails (rare), try parse whole string
+		if ip := net.ParseIP(p.Addr.String()); ip != nil {
+			log.Debugf("[AUTH][gRPC] peer client ip=%s", ip)
+			return ip
+		}
+	}
+	return nil
 }
 
 // NewHTTPAuthMiddleware returns an HTTP middleware that enforces rpcallowip and rpcauth.

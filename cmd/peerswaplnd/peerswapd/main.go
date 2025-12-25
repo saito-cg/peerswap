@@ -409,21 +409,28 @@ func run() error {
 	}
 	defer lis.Close()
 
+	// ---- gRPC: apply IP allowlist and optional rpcauth ----
 	rpcauthEntries := rpcauth.ParseConfigValue(cfg.RpcAuth)
-	var grpcSrv *grpc.Server
-	if len(rpcauthEntries) == 0 {
-		log.Infof("[AUTH] rpcauth disabled (no entries in config). Starting gRPC without auth interceptor.")
-		grpcSrv = grpc.NewServer()
+
+	// Parse rpcallowip and default to localhost-only if empty (bitcoind-like behavior)
+	allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP)
+	allowNets = rpcauth.EnsureDefaultLocalAllow(allowNets)
+
+	var interceptors []grpc.UnaryServerInterceptor
+	// IP allowlist (always applied; if allowNets has only localhost, external access is denied)
+	interceptors = append(interceptors, rpcauth.NewUnaryIPAllowInterceptor(allowNets))
+
+	if len(rpcauthEntries) > 0 {
+		log.Infof("[AUTH][gRPC] rpcauth enabled with %d entries", len(rpcauthEntries))
+		interceptors = append(interceptors, rpcauth.NewUnaryInterceptor(rpcauthEntries))
 	} else {
-		log.Infof("[AUTH] rpcauth enabled with %d entries. Starting gRPC with auth interceptor.", len(rpcauthEntries))
-		interceptors := []grpc.UnaryServerInterceptor{
-			rpcauth.NewUnaryInterceptor(rpcauthEntries),
-		}
-		grpcOpts := []grpc.ServerOption{
-			grpc.ChainUnaryInterceptor(interceptors...),
-		}
-		grpcSrv = grpc.NewServer(grpcOpts...)
+		log.Infof("[AUTH][gRPC] rpcauth disabled (no entries in config)")
 	}
+
+	grpcOpts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(interceptors...),
+	}
+	grpcSrv := grpc.NewServer(grpcOpts...)
 
 	peerswaprpc.RegisterPeerSwapServer(grpcSrv, peerswaprpcServer)
 
