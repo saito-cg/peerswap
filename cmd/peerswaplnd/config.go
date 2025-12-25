@@ -52,7 +52,9 @@ type PeerSwapConfig struct {
 	LiquidEnabled  bool `long:"liquidswaps" description:"enable bitcoin peerswaps"`
 	BitcoinEnabled bool `long:"bitcoinswaps" description:"enable bitcoin peerswaps"`
 
-	RpcAuth string `long:"rpcauth" description:"rpc authentication entries in the form username:salt$hash (comma-separated for multiple)"`
+	// RPC authentication settings
+	RpcAuth    string   `long:"rpcauth" description:"rpc authentication entries in the form username:salt$hash (comma-separated for multiple)"`
+	RpcAllowIP []string `long:"rpcallowip" description:"allowed IPs or CIDRs for REST RPC"`
 }
 
 func (p *PeerSwapConfig) String() string {

@@ -7,6 +7,9 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"net"
+	"net/http"
 	"strings"
 
 	"github.com/elementsproject/peerswap/log"
@@ -136,6 +139,8 @@ func VerifyRpcauth(user, password string, auths map[string]Entry) bool {
 	return match
 }
 
+// NewUnaryInterceptor builds a gRPC unary interceptor that enforces rpcauth.
+// If authMap is empty, authentication is skipped (backwards-compatible).
 func NewUnaryInterceptor(authMap map[string]Entry) grpc.UnaryServerInterceptor {
 	log.Debugf("[AUTH][Interceptor] build interceptor authMapCount=%d", len(authMap))
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -156,6 +161,151 @@ func NewUnaryInterceptor(authMap map[string]Entry) grpc.UnaryServerInterceptor {
 		log.Debugf("[AUTH][Interceptor] authentication success for user=%q method=%s", u, info.FullMethod)
 		return handler(ctx, req)
 	}
+}
+
+// ParseAllowCIDRs parses allowlist strings (IP or CIDR) into []*net.IPNet.
+// - "1.2.3.4" -> 1.2.3.4/32
+// - "2001:db8::1" -> /128
+// - "10.0.0.0/8" -> as-is
+func ParseAllowCIDRs(rpcAllow []string) []*net.IPNet {
+	var nets []*net.IPNet
+	for idx, v := range rpcAllow {
+		s := strings.TrimSpace(v)
+		if s == "" {
+			log.Debugf("[AUTH][ParseAllowCIDRs] entry[%d] empty, skip", idx)
+			continue
+		}
+		if strings.Contains(s, "/") {
+			_, n, err := net.ParseCIDR(s)
+			if err != nil {
+				log.Debugf("[AUTH][ParseAllowCIDRs] invalid CIDR %q: %v", s, err)
+				continue
+			}
+			nets = append(nets, n)
+			log.Debugf("[AUTH][ParseAllowCIDRs] add CIDR %q", s)
+			continue
+		}
+		ip := net.ParseIP(s)
+		if ip == nil {
+			log.Debugf("[AUTH][ParseAllowCIDRs] invalid IP %q", s)
+			continue
+		}
+		var mask net.IPMask
+		if ip.To4() != nil {
+			mask = net.CIDRMask(32, 32)
+		} else {
+			mask = net.CIDRMask(128, 128)
+		}
+		n := &net.IPNet{IP: ip, Mask: mask}
+		nets = append(nets, n)
+		log.Debugf("[AUTH][ParseAllowCIDRs] add IP %q", s)
+	}
+	log.Infof("[AUTH] rpcallowip entries=%d", len(nets))
+	return nets
+}
+
+// NewHTTPAuthMiddleware returns an HTTP middleware that enforces rpcallowip and rpcauth.
+// - If allowedNets is non-empty, only requests from these IP ranges are allowed.
+// - If authMap is non-empty, Authorization: Basic base64(user:pass) is required.
+// - If either is empty, the corresponding check is skipped.
+func NewHTTPAuthMiddleware(authMap map[string]Entry, allowedNets []*net.IPNet) func(next http.Handler) http.Handler {
+	enabled := len(authMap) > 0
+	log.Infof("[AUTH][HTTP] rpcauth enabled=%v, rpcallowip count=%d", enabled, len(allowedNets))
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// IP allowlist check
+			if len(allowedNets) > 0 {
+				remoteIP := clientIP(r)
+				if !ipAllowed(remoteIP, allowedNets) {
+					log.Infof("[AUTH][HTTP] forbidden remote ip=%s path=%s", remoteIP, r.URL.Path)
+					writeJSON(w, http.StatusForbidden, 7, "forbidden: ip not allowed") // gRPC code 7: PermissionDenied
+					return
+				}
+			}
+
+			// rpcauth check
+			if enabled {
+				u, p, ok := extractBasicFromHTTP(r)
+				if !ok {
+					log.Infof("[AUTH][HTTP] missing or invalid Authorization header path=%s", r.URL.Path)
+					w.Header().Set("Www-Authenticate", `Basic realm="peerswap"`)
+					writeJSON(w, http.StatusUnauthorized, 16, "missing or invalid Authorization header") // gRPC code 16: Unauthenticated
+					return
+				}
+				if !VerifyRpcauth(u, p, authMap) {
+					log.Infof("[AUTH][HTTP] authentication failed for user=%q path=%s", u, r.URL.Path)
+					w.Header().Set("Www-Authenticate", `Basic realm="peerswap"`)
+					writeJSON(w, http.StatusUnauthorized, 16, "authentication failed")
+					return
+				}
+			}
+
+			// OK
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func extractBasicFromHTTP(r *http.Request) (string, string, bool) {
+	auth := r.Header.Get("Authorization")
+	log.Debugf("[AUTH][HTTP] Authorization header prefix=%q", prefix(auth, 16))
+	if auth == "" || !strings.HasPrefix(strings.ToLower(auth), "basic ") {
+		return "", "", false
+	}
+	enc := strings.TrimSpace(auth[len("Basic "):])
+	dec, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		log.Debugf("[AUTH][HTTP] base64 decode failed: %v", err)
+		return "", "", false
+	}
+	cred := string(dec)
+	up := strings.SplitN(cred, ":", 2)
+	if len(up) != 2 {
+		return "", "", false
+	}
+	return up[0], up[1], true
+}
+
+func clientIP(r *http.Request) net.IP {
+	// Trust X-Forwarded-For first if present (left-most IP)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		ip := net.ParseIP(strings.TrimSpace(parts[0]))
+		if ip != nil {
+			log.Debugf("[AUTH][HTTP] XFF client ip=%s", ip)
+			return ip
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		log.Debugf("[AUTH][HTTP] split remote addr failed: %v", err)
+		return nil
+	}
+	ip := net.ParseIP(host)
+	log.Debugf("[AUTH][HTTP] remote ip=%s", ip)
+	return ip
+}
+
+func ipAllowed(ip net.IP, nets []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeJSON(w http.ResponseWriter, status int, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"code":    code,
+		"message": msg,
+		"details": []any{},
+	})
 }
 
 func prefix(s string, n int) string {

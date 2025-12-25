@@ -452,8 +452,14 @@ func run() error {
 		if err != nil {
 			return err
 		}
+
+		authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)     // empty => auth disabled
+		allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP) // empty => no IP restriction
+		handler := rpcauth.NewHTTPAuthMiddleware(authMap, allowNets)(mux)
 		go func() {
-			err := http.ListenAndServe(cfg.RestHost, mux)
+			// err := http.ListenAndServe(cfg.RestHost, mux)
+			err := http.ListenAndServe(cfg.RestHost, handler)
+
 			if err != nil {
 				core_log.Fatal(err)
 			}
