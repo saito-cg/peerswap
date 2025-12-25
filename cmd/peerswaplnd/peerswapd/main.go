@@ -453,18 +453,20 @@ func run() error {
 			return err
 		}
 
-		authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)     // empty => auth disabled
-		allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP) // empty => no IP restriction
+		// auth disabled if no entries
+		authMap := rpcauth.ParseConfigValue(cfg.RpcAuth)
+		// parse configured list
+		allowNets := rpcauth.ParseAllowCIDRs(cfg.RpcAllowIP)
+		// default to localhost-only if empty
+		allowNets = rpcauth.EnsureDefaultLocalAllow(allowNets)
 		handler := rpcauth.NewHTTPAuthMiddleware(authMap, allowNets)(mux)
-		go func() {
-			// err := http.ListenAndServe(cfg.RestHost, mux)
-			err := http.ListenAndServe(cfg.RestHost, handler)
 
+		go func() {
+			err := http.ListenAndServe(cfg.RestHost, handler)
 			if err != nil {
 				core_log.Fatal(err)
 			}
 		}()
-
 		log.Infof("peerswapd rest listening on %v", cfg.RestHost)
 	}
 	<-shutdown

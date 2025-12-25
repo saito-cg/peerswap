@@ -204,6 +204,16 @@ func ParseAllowCIDRs(rpcAllow []string) []*net.IPNet {
 	return nets
 }
 
+// EnsureDefaultLocalAllow applies bitcoind-like default: if rpcallowip is not set,
+// restrict to localhost only (127.0.0.1 and ::1).
+func EnsureDefaultLocalAllow(allowedNets []*net.IPNet) []*net.IPNet {
+	if len(allowedNets) == 0 {
+		log.Infof("[AUTH][HTTP] rpcallowip not set; defaulting to localhost-only (127.0.0.1, ::1)")
+		return ParseAllowCIDRs([]string{"127.0.0.1", "::1"})
+	}
+	return allowedNets
+}
+
 // NewHTTPAuthMiddleware returns an HTTP middleware that enforces rpcallowip and rpcauth.
 // - If allowedNets is non-empty, only requests from these IP ranges are allowed.
 // - If authMap is non-empty, Authorization: Basic base64(user:pass) is required.
