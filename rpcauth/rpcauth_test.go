@@ -25,6 +25,41 @@ func hmacHex(salt, password string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+func TestParseConfigValue_CommaRejected(t *testing.T) {
+	m := ParseConfigValue("alice:abc$def,bob:abc$def")
+	if len(m) != 0 {
+		t.Fatalf("expected 0 entries for comma-separated single line, got %d", len(m))
+	}
+}
+
+func TestParseConfigValues_MultiLines(t *testing.T) {
+	salt := "0123456789abcdef0123456789abcdef"
+	pass := "secret"
+	hash := hmacHex(salt, pass)
+	entries := []string{
+		"alice:" + salt + "$" + hash,
+		"bob:" + salt + "$" + hash,
+	}
+	m := ParseConfigValues(entries)
+	if len(m) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(m))
+	}
+	if _, ok := m["alice"]; !ok {
+		t.Fatalf("expected alice entry")
+	}
+	if _, ok := m["bob"]; !ok {
+		t.Fatalf("expected bob entry")
+	}
+}
+
+func TestParseRpcauthEntries_CommaInEntryRejected(t *testing.T) {
+	entries := []string{"alice:abc$def,bob:abc$def"}
+	m := ParseRpcauthEntries(entries)
+	if len(m) != 0 {
+		t.Fatalf("expected 0 entries when entry contains comma")
+	}
+}
+
 func TestParseConfigValue_EmptyAndMultiple(t *testing.T) {
 	// empty
 	m := ParseConfigValue("")
@@ -305,7 +340,8 @@ func TestNewHTTPAuthMiddleware(t *testing.T) {
 // Additional tests to improve coverage
 
 func TestBuildSecurity_DefaultLocalhost(t *testing.T) {
-	sec := BuildSecurity("", nil)
+	// BuildSecurity now accepts []string for rpcauth values.
+	sec := BuildSecurity(nil, nil)
 	if len(sec.AuthMap) != 0 {
 		t.Fatalf("expected empty auth map")
 	}

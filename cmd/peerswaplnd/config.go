@@ -53,7 +53,14 @@ type PeerSwapConfig struct {
 	BitcoinEnabled bool `long:"bitcoinswaps" description:"enable bitcoin peerswaps"`
 
 	// RPC authentication settings
-	RpcAuth    string   `long:"rpcauth" description:"rpc authentication entries in the form username:salt$hash (comma-separated for multiple)"`
+	// Examples:
+	//   rpcauth=alice:16bytesaltshex$hmacsha256hex
+	//   rpcauth=bob:16bytesaltshex$hmacsha256hex
+	//   rpcauth=carol:16bytesaltshex$hmacsha256hex
+	RpcAuth []string `long:"rpcauth" description:"rpc authentication entries username:salt$hash"`
+	// Multiple IPs/CIDRs allowed; repeatable in peerswap.conf:
+	//   rpcallowip=127.0.0.1
+	//   rpcallowip=10.0.0.0/8
 	RpcAllowIP []string `long:"rpcallowip" description:"allowed IPs or CIDRs for REST RPC"`
 }
 

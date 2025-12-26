@@ -32,32 +32,79 @@ type SecurityOptions struct {
 	AllowedNets []*net.IPNet
 }
 
-// BuildSecurity parses rpcauth and rpcallowip from config values,
-// and applies localhost-only default when rpcallowip is not set.
-func BuildSecurity(rpcauthValue string, rpcAllowIPs []string) SecurityOptions {
-	authMap := ParseConfigValue(rpcauthValue)
+// BuildSecurity parses single rpcauth config value and rpcallowip,
+// applies localhost-only default when rpcallowip is not set.
+// NOTE: rpcauth must be one entry per line.
+// For a single line containing comma, exactly one valid entry is accepted; otherwise rejected.
+func BuildSecurity(rpcauthValues []string, rpcAllowIPs []string) SecurityOptions {
+	authMap := ParseConfigValues(rpcauthValues)
 	allow := ParseAllowCIDRs(rpcAllowIPs)
 	allow = EnsureDefaultLocalAllow(allow)
 	return SecurityOptions{AuthMap: authMap, AllowedNets: allow}
 }
 
-// ParseConfigValue parses a config string that may contain one or more rpcauth
-// entries separated by commas. Each entry must be in the form "username:salt$hash".
-func ParseConfigValue(authValue string) map[string]Entry {
-	raw := strings.TrimSpace(authValue)
+// ParseConfigValue parses a single rpcauth entry line.
+//   - Empty string -> empty map
+//   - Contains comma -> 分割し、ちょうど1件だけ有効に解釈できた場合にその1件のみ受理。
+//     0件または2件以上の有効エントリがある場合は全体を拒否（空マップ）。
+//   - カンマなし -> そのまま ParseRpcauthEntries に渡す
+func ParseConfigValue(raw string) map[string]Entry {
+	out := make(map[string]Entry)
+
+	raw = strings.TrimSpace(raw)
 	log.Debugf("[AUTH][ParseConfigValue] raw length=%d empty=%v", len(raw), raw == "")
 	if raw == "" {
+		return out
+	}
+
+	if strings.Contains(raw, ",") {
+		parts := strings.Split(raw, ",")
+		valid := make(map[string]Entry)
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			// 各要素を独立にパース（要素内にカンマがあれば ParseRpcauthEntries 側で拒否）
+			m := ParseRpcauthEntries([]string{p})
+			for k, v := range m {
+				valid[k] = v
+			}
+		}
+		if len(valid) == 1 {
+			for k, v := range valid {
+				out[k] = v
+			}
+			return out
+		}
+		log.Infof("[AUTH] rpcauth entry contains a comma and will be ignored; use one line per user")
 		return map[string]Entry{}
 	}
-	entries := strings.Split(raw, ",")
-	log.Debugf("[AUTH][ParseConfigValue] split into %d entries", len(entries))
-	for i, e := range entries {
-		log.Debugf("[AUTH][ParseConfigValue] entry[%d]=%q", i, strings.TrimSpace(e))
+
+	// No comma: parse as-is.
+	return ParseRpcauthEntries([]string{raw})
+}
+
+// ParseConfigValues parses multiple rpcauth config lines.
+// Each line must be a single entry; lines containing commas are rejected.
+func ParseConfigValues(authValues []string) map[string]Entry {
+	var entries []string
+	for idx, v := range authValues {
+		s := strings.TrimSpace(v)
+		if s == "" {
+			continue
+		}
+		if strings.Contains(s, ",") {
+			log.Infof("[AUTH] rpcauth line[%d] contains a comma and will be ignored; use one line per user", idx)
+			continue
+		}
+		entries = append(entries, s)
 	}
 	return ParseRpcauthEntries(entries)
 }
 
 // ParseRpcauthEntries converts `username:salt$hash` strings into a map[username]Entry.
+// Any entry containing a comma is rejected to disallow single-line multi-user format.
 func ParseRpcauthEntries(entries []string) map[string]Entry {
 	log.Debugf("[AUTH][ParseRpcauthEntries] start parse, count=%d", len(entries))
 	auths := make(map[string]Entry)
@@ -65,6 +112,10 @@ func ParseRpcauthEntries(entries []string) map[string]Entry {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] empty, skip", idx)
+			continue
+		}
+		if strings.Contains(e, ",") {
+			log.Debugf("[AUTH][ParseRpcauthEntries] entry[%d] contains comma, reject", idx)
 			continue
 		}
 		parts := strings.SplitN(e, ":", 2)
@@ -95,48 +146,37 @@ func ParseRpcauthEntries(entries []string) map[string]Entry {
 // ExtractBasicAuth parses Authorization: Basic base64(user:pass) from gRPC metadata.
 func ExtractBasicAuth(ctx context.Context) (string, string, bool) {
 	md, ok := metadata.FromIncomingContext(ctx)
-	log.Debugf("[AUTH][ExtractBasicAuth] metadata present=%v", ok)
 	if !ok {
 		return "", "", false
 	}
 	authVals := md.Get("authorization")
-	log.Debugf("[AUTH][ExtractBasicAuth] 'authorization' header count=%d", len(authVals))
 	if len(authVals) == 0 {
 		authVals = md.Get("Authorization")
-		log.Debugf("[AUTH][ExtractBasicAuth] 'Authorization' header count=%d", len(authVals))
 	}
 	if len(authVals) == 0 {
 		return "", "", false
 	}
 	auth := authVals[0]
-	log.Debugf("[AUTH][ExtractBasicAuth] first header prefix=%q", prefix(auth, 16))
 	if !strings.HasPrefix(strings.ToLower(auth), "basic ") {
-		log.Debugf("[AUTH][ExtractBasicAuth] header does not start with 'Basic '")
 		return "", "", false
 	}
 	enc := strings.TrimSpace(auth[len("Basic "):])
 	dec, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil {
-		log.Debugf("[AUTH][ExtractBasicAuth] base64 decode failed: %v", err)
 		return "", "", false
 	}
 	cred := string(dec)
-	log.Debugf("[AUTH][ExtractBasicAuth] decoded credential length=%d", len(cred))
 	up := strings.SplitN(cred, ":", 2)
 	if len(up) != 2 {
-		log.Debugf("[AUTH][ExtractBasicAuth] decoded credential missing ':' separator")
 		return "", "", false
 	}
-	log.Debugf("[AUTH][ExtractBasicAuth] parsed user=%q passwordLen=%d", up[0], len(up[1]))
 	return up[0], up[1], true
 }
 
 // VerifyRpcauth: hash == HMAC_SHA256(key=salt, msg=password).
 func VerifyRpcauth(user, password string, auths map[string]Entry) bool {
-	log.Debugf("[AUTH][VerifyRpcauth] start verify user=%q authsCount=%d", user, len(auths))
 	entry, ok := auths[user]
 	if !ok {
-		log.Debugf("[AUTH][VerifyRpcauth] user not found: %q", user)
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(entry.Salt))
@@ -276,8 +316,6 @@ func NewHTTPAuthMiddleware(authMap map[string]Entry, allowedNets []*net.IPNet) f
 		})
 	}
 }
-
-// Convenience helpers to reduce boilerplate in peerswapd/main.go
 
 // GRPCServerOptions returns server options with IP allowlist and optional rpcauth.
 func GRPCServerOptions(sec SecurityOptions, extra ...grpc.ServerOption) []grpc.ServerOption {
