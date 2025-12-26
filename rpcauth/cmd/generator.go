@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -97,56 +98,20 @@ func main() {
 				Name:  "password",
 				Usage: "Password (leave empty to auto-generate)",
 			},
-			&cli.BoolFlag{
-				Name:  "config",
-				Usage: "Output in config file format",
-			},
-			&cli.BoolFlag{
-				Name:  "env",
-				Usage: "Output environment variables only",
-			},
-			&cli.BoolFlag{
-				Name:  "json",
-				Usage: "Output in JSON format",
-			},
 		},
 		Action: func(c *cli.Context) error {
 			username := c.String("username")
 			password := c.String("password")
-			asConfig := c.Bool("config")
-			asEnv := c.Bool("env")
-			asJSON := c.Bool("json")
 
 			auth, err := GenerateRPCAuth(username, password)
 			if err != nil {
 				return fmt.Errorf("failed to generate credentials: %w", err)
 			}
 
-			// JSON format output
-			if asJSON {
-				fmt.Printf(`{
-  "username": "%s",
-  "password": "%s",
-  "rpcauth": "%s:%s$%s"
-}
-`, auth.Username, auth.Password, auth.Username, auth.Salt, auth.Hash)
-				return nil
-			}
+			// Precompute Base64 of "username:password" for Basic Auth header
+			b64Cred := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
 
-			// Environment variables only
-			if asEnv {
-				fmt.Printf("export PEERSWAP_RPC_USER=%s\n", auth.Username)
-				fmt.Printf("export PEERSWAP_RPC_PASSWORD=%s\n", auth.Password)
-				return nil
-			}
-
-			// Config format only
-			if asConfig {
-				fmt.Println(auth.String())
-				return nil
-			}
-
-			// Full output (default)
+			// Default output (simple, human-friendly)
 			fmt.Println("╔════════════════════════════════════════════════════════════════╗")
 			fmt.Println("║          PeerSwap RPC Authentication Credentials               ║")
 			fmt.Println("╚════════════════════════════════════════════════════════════════╝")
@@ -164,6 +129,12 @@ func main() {
 			fmt.Printf("  Username: %s\n", auth.Username)
 			fmt.Printf("  Password: %s\n", auth.Password)
 			fmt.Println()
+
+			fmt.Println("🧾 Encoded Basic Auth (Base64 of username:password)")
+			fmt.Println("───────────────────────────────────────────────────────────────")
+			fmt.Printf("  %s\n", b64Cred)
+			fmt.Println()
+			fmt.Println("Use in HTTP header as: Authorization: Basic " + b64Cred)
 
 			return nil
 		},
